@@ -192,9 +192,6 @@ class Dataset(torch.utils.data.Dataset):
         
         if self.task_name == "class_object": 
             current_label = self.images[index].split(".")[0][:-3] + self.task_name + ".npy"
-        # Load data and get label
-        
-        #label = read_image_resize(self.labels_path + "/" + current_label)
             label = np.load(self.labels_path + "/" + current_label, allow_pickle=True)
             label = torch.tensor(label).type(torch.FloatTensor)
 
@@ -219,22 +216,20 @@ params = {"batch_size": 32, "shuffle": True, "num_workers": 6}
 params_test = {"batch_size": 128, "shuffle": True, "num_workers": 6}
 
 ### To get Encoder + Decoder
-# fname_task = "rgb2sfnorm"
-fname_task = "normal"
+fname_task = "class_object"
 
 train_dataset = Dataset(
     "data/taskonomy_rgb_full/train/rgb",
-    "data/taskonomy_normal_full/train/normal",
+    "data/taskonomy_class_obj_full/train/class_object",
     fname_task
 )
-
 # test_dataset = Dataset(
 #     "data/rgb",
-#     "data/normal",
+#     "data/class_object",
 #     fname_task
 # )
 
-saving_model_path = "./trained_normals.pth"
+saving_model_path = "./trained_classifier.pth"
 
 training_generator = torch.utils.data.DataLoader(train_dataset, **params)
 # test_generator = torch.utils.data.DataLoader(test_dataset, **params_test)
@@ -243,8 +238,14 @@ default_device = "cuda" if torch.cuda.is_available() else "cpu"
 TASKONOMY_LOCATION = "https://github.com/StanfordVL/taskonomy/tree/master/taskbank"
 
 ## Define Model
-is_decoder_mlp = fname_task not in PIX_TO_PIX_TASKS
-apply_tanh = fname_task not in DONT_APPLY_TANH_TASKS
+# is_decoder_mlp = feature_task not in PIX_TO_PIX_TASKS
+# print("is_decoder_mlp")
+# print(is_decoder_mlp)
+is_decoder_mlp= True
+# apply_tanh = feature_task not in DONT_APPLY_TANH_TASKS
+# print("apply_tanh")
+# print(apply_tanh)
+apply_tanh = True
 
 out_channels = TASKS_TO_CHANNELS[fname_task]
 encoder_path = TASKONOMY_PRETRAINED_URLS[fname_task + "_encoder"]
@@ -282,42 +283,63 @@ for (
         )
     )
 
+model_path = 'trained_classifier.pth'
 decoder_nets = nets[0].to(default_device)
-for p in decoder_nets.parameters():
-    p.requires_grad = True
+decoder_nets_checkpoint = torch.load(model_path)
+decoder_nets.load_state_dict(decoder_nets_checkpoint)
+decoder_nets.eval()
+
 # Define loss & optimizer 
-initial_learning_rate = 1e-4
-optimizer = optim.Adam(decoder_nets.parameters(), lr=initial_learning_rate, weight_decay = 2e-6)
-optim.lr_scheduler.StepLR(optimizer, step_size = 1000, gamma=0.2, last_epoch=-1)
-criterion = nn.MSELoss() 
 
-num_epochs = 30
+curr_dataset = Dataset(
+    "data/taskonomy_rgb_full/test/rgb",
+    "data/taskonomy_class_obj_full/test/class_object",
+    fname_task
+)
+training_generator = torch.utils.data.DataLoader(curr_dataset, **params_test)
 
-losses = []
+def isin2daccuracy(arr1, arr2):
+    j = 0
+    for i in range(arr1.shape[0]):
+        if np.isin(arr1[i], arr2[i]):
+            j += 1
+    return j / arr1.shape[0]
 
-for epoch in range(num_epochs):
-    running_loss = 0.0
-    for i, data in enumerate(training_generator, 0): # enumerate
-        img, label = data
-        img, label = img.to(default_device), label.to(default_device)
-        optimizer.zero_grad()
-        output = decoder_nets(img)
-        loss = criterion(output, label)
-        loss.backward()
-        optimizer.step()
-        running_loss += loss.item()
-        if i % 1000 == 0:
-            print("[%d, %5d] loss: %.4f" % (epoch + 1, i + 1, running_loss / 1000))
-            running_loss = 0.0
-            # dataiter = iter(test_generator)
-            # img_test, label_test = dataiter.next()
-            # output_test = decoder_nets(img_test)
-            # loss_test = criterion(output_test, label_test)
-            # print("Test loss: %.4f" % (loss_test))
-            torch.save(decoder_nets.state_dict(), saving_model_path)
-            losses.append(running_loss)
-            loss_array = np.asarray(losses)
-            np.save("losses_normals.npy", loss_array)
 
-print("Training Done")
 
+batch_id = 0
+for img, label in training_generator:
+    img, label = img.to(default_device), label.to(default_device)
+    print(batch_id)
+    m = torch.nn.Softmax(dim=1)
+    output_decoder = m(decoder_nets(img))
+    output_numpy = output_decoder.cpu().data.numpy()
+    label_numpy = label.cpu().data.numpy()
+    top5class = output_numpy[0].argsort()[::-1][:5]
+    print("Prediction")
+    
+    print(top5class)
+    print(output_numpy[0][top5class])
+    print("Label")
+    top5labelclass = label_numpy[0].argsort()[::-1][:5]
+    print(top5labelclass)
+    print(label_numpy[0][top5labelclass])
+    print(
+        "MSE : " + str(((label_numpy - output_numpy) ** 2).sum() / params_test["batch_size"])
+    )
+    print(
+        "Accuracy top prediction : "
+        + str(
+            (label_numpy.argmax(1) == output_numpy.argmax(1)).sum()
+            / params_test["batch_size"]
+        )
+    )
+    print(
+        "Is in top 5 accuracy : "
+        + str(
+            isin2daccuracy(
+                output_numpy.argmax(1), label_numpy.argsort()[:, ::-1][:, :5]
+            )
+        )
+    )
+    batch_id += 1

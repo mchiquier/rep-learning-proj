@@ -27,14 +27,6 @@ from taskonomy_network import (
     TaskonomyNetwork,
     TASKONOMY_PRETRAINED_URLS,
     TASKS_TO_CHANNELS,
-)
-
-from taskonomy_network import (
-    TaskonomyEncoder,
-    TaskonomyDecoder,
-    TaskonomyNetwork,
-    TASKONOMY_PRETRAINED_URLS,
-    TASKS_TO_CHANNELS,
     PIX_TO_PIX_TASKS,
     DONT_APPLY_TANH_TASKS,
 )
@@ -227,20 +219,20 @@ params_test = {"batch_size": 128, "shuffle": True, "num_workers": 6}
 fname_task = "class_object"
 
 train_dataset = Dataset(
-    "data/rgb",
-    "data/class_object",
+    "data/taskonomy_rgb_full/train/rgb",
+    "data/taskonomy_class_obj_full/train/class_object",
     fname_task
 )
-test_dataset = Dataset(
-    "data/rgb",
-    "data/class_object",
-    fname_task
-)
+# test_dataset = Dataset(
+#     "data/rgb",
+#     "data/class_object",
+#     fname_task
+# )
 
 saving_model_path = "./trained_classifier.pth"
 
 training_generator = torch.utils.data.DataLoader(train_dataset, **params)
-test_generator = torch.utils.data.DataLoader(test_dataset, **params_test)
+# test_generator = torch.utils.data.DataLoader(test_dataset, **params_test)
 
 default_device = "cuda" if torch.cuda.is_available() else "cpu"
 TASKONOMY_LOCATION = "https://github.com/StanfordVL/taskonomy/tree/master/taskbank"
@@ -301,12 +293,13 @@ optim.lr_scheduler.StepLR(optimizer, step_size = 1000, gamma=0.2, last_epoch=-1)
 criterion = nn.CrossEntropyLoss() 
 
 num_epochs = 30
+losses = []
 
 for epoch in range(num_epochs):
     running_loss = 0.0
     for i, data in enumerate(training_generator, 0): # enumerate
-        print(i)
         img, label = data
+        img, label = img.to(default_device), label.to(default_device)
         optimizer.zero_grad()
         output = decoder_nets(img)
         loss = criterion(output, torch.max(label, 1)[1])
@@ -314,15 +307,18 @@ for epoch in range(num_epochs):
         optimizer.step()
 
         running_loss += loss.item()
-        if i % 2000 == 0:
-            print("[%d, %5d] loss: %.4f" % (epoch + 1, i + 1, running_loss / 2000))
+        if i % 1000 == 0:
+            print("[%d, %5d] loss: %.4f" % (epoch + 1, i + 1, running_loss / 1000))
             running_loss = 0.0
-            dataiter = iter(test_generator)
-            img_test, label_test = dataiter.next()
-            output_test = decoder_nets(img_test)
-            loss_test = criterion(output_test, label_test)
-            print("Test loss: %.4f" % (loss_test))
-            torch.save(net.state_dict(), saving_model_path)
+            # dataiter = iter(test_generator)
+            # img_test, label_test = dataiter.next()
+            # output_test = decoder_nets(img_test)
+            # loss_test = criterion(output_test, label_test)
+            # print("Test loss: %.4f" % (loss_test))
+            torch.save(decoder_nets.state_dict(), saving_model_path)
+            losses.append(running_loss)
+            loss_array = np.asarray(losses)
+            np.save("losses_classifier.npy", loss_array)
 
 print("Training Done")
 
